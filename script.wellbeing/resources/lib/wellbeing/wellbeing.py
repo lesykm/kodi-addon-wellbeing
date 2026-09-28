@@ -1,5 +1,6 @@
 import datetime
 import os
+import threading
 import time
 
 import xbmc
@@ -7,9 +8,19 @@ import xbmcaddon
 import xbmcgui
 import xbmcvfs
 
+from resources.lib.wellbeing import identity, playcount
+from resources.lib.wellbeing import state as state_store
 from resources.lib.wellbeing.player import Player
 
+LOG_LEVELS = {
+    "info": xbmc.LOGINFO,
+    "warning": xbmc.LOGWARNING,
+    "error": xbmc.LOGERROR,
+}
+
 CHECK_INTERVAL = 10
+
+SLICE_INTERVAL = 1
 
 OFF = 0
 AUDIO_VIDEO = 1
@@ -42,7 +53,16 @@ class Wellbeing(xbmc.Monitor):
         self._changed = .0
 
         self._addon = xbmcaddon.Addon()
-        self._player = Player()
+        self._id: str = self._addon.getAddonInfo("id")
+
+        self._countLock = threading.RLock()
+        self._counter = self._buildCounter()
+
+        self._blocked = None
+        self._warnLast: bool = True
+
+        self._player = Player(onStarted=self._onPlaybackStarted,
+                              onStopped=self._onPlaybackStopped)
 
         self._wday: int = -1
         self._ignoreLimit: bool = False
@@ -69,6 +89,169 @@ class Wellbeing(xbmc.Monitor):
             "date") == datetime.datetime.strftime(datetime.datetime.now(), "%Y-%m-%d") else 0
 
         self.onSettingsChanged()
+
+
+    def _log(self, message: str, level: str = "info") -> None:
+
+        xbmc.log("%s: %s" % (self._id, message),
+                 LOG_LEVELS.get(level, xbmc.LOGINFO))
+
+    def _readCountConfig(self) -> playcount.Config:
+
+        return playcount.Config(
+            limitation=self._addon.getSettingInt("countlimitation"),
+            plays=[self._addon.getSettingInt("plays_%i" % d) for d in range(7)],
+            grace=self._addon.getSettingInt("countgrace"),
+            rule=self._addon.getSettingInt("countrule"),
+            reset_hour=self._addon.getSettingInt("countresethour"),
+            bonus_size=self._addon.getSettingInt("countbonus"))
+
+    def _buildCounter(self) -> playcount.PlayCounter:
+
+        self._statePath = os.path.join(
+            xbmcvfs.translatePath(self._addon.getAddonInfo("profile")),
+            "state.json")
+
+        config = self._readCountConfig()
+        today = playcount.logical_day(time.time(), config.reset_hour)
+
+        return playcount.PlayCounter(
+            config,
+            state_store.load(self._statePath, today, log=self._log),
+            persist=lambda s: state_store.save(self._statePath, s, log=self._log),
+            log=self._log)
+
+    def _onPlaybackStarted(self) -> None:
+        """Kodi's thread. Keep it short.
+
+        Kodi's Python API has no way to refuse playback before it begins, so
+        the only option is to let it start and stop it at once. Everything
+        here is in memory; the dialog is left to the service loop, because
+        blocking Kodi's callback thread on a modal is a good way to wedge the
+        player.
+        """
+
+        key = identity.identity(self._player)
+        name = identity.label(self._player)
+        now = time.time()
+
+        try:
+            path = self._player.getPlayingFile()
+        except Exception:
+            path = ""
+
+        with self._countLock:
+            if self._counter.should_block(key, self._player.isPlayingVideo(), now):
+                self._blocked = (key, name, path)
+                self._log("refused '%s': no items left today" % (name or key))
+                self._player.stop()
+                return
+
+            self._counter.begin(key, name, now)
+
+    def _handleBlocked(self) -> None:
+        """Explain a refusal, and offer the way past it. Service loop only."""
+
+        with self._countLock:
+            blocked = self._blocked
+            self._blocked = None
+
+        if blocked is None:
+            return
+
+        _key, _name, path = blocked
+
+        self._notify(32223)
+
+        if not self._askForExtraPlays():
+            return
+
+        with self._countLock:
+            granted = self._counter.config.bonus_size
+            self._counter.grant_bonus(granted, time.time())
+
+        xbmcgui.Dialog().notification(
+            self._addon.getLocalizedString(32000),
+            self._addon.getLocalizedString(32224) % granted, icon=self._icon)
+
+        if path:
+            try:
+                self._player.play(path)
+            except Exception as e:
+                self._log("could not restart '%s' after the override: %s"
+                          % (path, e), "warning")
+
+    def _runCountCommand(self, command: str) -> None:
+        """Carry out a request left by script.py.
+
+        The script runs in its own interpreter and cannot safely write the
+        state file -- the service holds today's count in memory and would
+        overwrite it on the next save -- so it leaves a request in a setting
+        and the service, the only writer, acts on it here.
+        """
+
+        now = time.time()
+
+        if command == "reset":
+            with self._countLock:
+                self._counter.reset(now)
+                used, allowed = self._counter.used(), self._counter.allowed(now)
+
+        elif command == "grant":
+            with self._countLock:
+                granted = self._counter.config.bonus_size
+                self._counter.grant_bonus(granted, now)
+                used, allowed = self._counter.used(), self._counter.allowed(now)
+
+        else:
+            self._log("ignoring unknown command '%s'" % command, "warning")
+            return
+
+        xbmcgui.Dialog().notification(
+            self._addon.getLocalizedString(32000),
+            self._addon.getLocalizedString(32220) % (used, allowed),
+            icon=self._icon)
+
+    def _askForExtraPlays(self) -> bool:
+        """The same prompt the time limit uses, and the same password."""
+
+        password = xbmcgui.Dialog().input(
+            heading=self._addon.getLocalizedString(32035),
+            type=xbmcgui.INPUT_ALPHANUM,
+            option=xbmcgui.ALPHANUM_HIDE_INPUT, autoclose=60000)
+
+        if password != self._password:
+            self._notify(32036)
+            return False
+
+        return True
+
+    def _onPlaybackStopped(self) -> None:
+        """Kodi's thread. Keep it short."""
+
+        with self._countLock:
+            self._counter.end()
+
+    def _handlePlayCount(self, _interval: int) -> None:
+
+        now = time.time()
+
+        with self._countLock:
+            if not self._counter.applies(self._player.isPlayingVideo()):
+                return
+            if not self._counter.tick(_interval, now):
+                return
+            used = self._counter.used()
+            allowed = self._counter.allowed(now)
+            left = self._counter.remaining(now)
+
+        if self._warnLast and left == 0:
+            self._notify(32222)
+        elif self._notification != NOTIFY_OFF:
+            xbmcgui.Dialog().notification(
+                self._addon.getLocalizedString(32000),
+                self._addon.getLocalizedString(32220) % (used, allowed),
+                icon=self._icon)
 
     def onSettingsChanged(self) -> None:
 
@@ -112,6 +295,16 @@ class Wellbeing(xbmc.Monitor):
             self._addon.setSetting("limit", DEFAULT_LIMIT)
 
         self._password = self._addon.getSettingString("password")
+
+        self._warnLast = self._addon.getSettingBool("countwarnlast")
+
+        with self._countLock:
+            self._counter.configure(self._readCountConfig())
+
+        command = self._addon.getSetting("countcommand")
+        if command:
+            self._addon.setSetting("countcommand", "")
+            self._runCountCommand(command)
 
         self._autostopInterval = AUTO_STOP_INTERVAL[self._addon.getSettingInt(
             "autostop")]
@@ -253,14 +446,40 @@ class Wellbeing(xbmc.Monitor):
 
             _interval = CHECK_INTERVAL - t_now.tm_sec % CHECK_INTERVAL
 
-            self._player.isPlaying() and not self._player.isPaused() \
+            _playing = self._player.isPlaying() and not self._player.isPaused()
+
+            if _playing:
+                self._handlePlayCount(_interval)
+
+            _playing \
                 and not self._handleLimit(t_now, _interval) \
                 and not self._handleRestPeriod(t_now)
 
-            if self.waitForAbort(_interval):
+            if self._waitAndHandleBlocks(_interval):
                 break
 
         self.saveUsageToSettings()
+
+    def _waitAndHandleBlocks(self, seconds: int) -> bool:
+        """Wait `seconds`, checking for refused playback along the way.
+
+        The total wait is unchanged, so the time budget's arithmetic is
+        untouched -- only the granularity differs. A refusal that arrives just
+        after a tick would otherwise sit unexplained for the rest of the
+        interval, with playback already stopped.
+        """
+
+        left = seconds
+        while left > 0:
+            self._handleBlocked()
+
+            step = min(SLICE_INTERVAL, left)
+            if self.waitForAbort(step):
+                return True
+            left -= step
+
+        self._handleBlocked()
+        return False
 
     def saveUsageToSettings(self) -> None:
 
