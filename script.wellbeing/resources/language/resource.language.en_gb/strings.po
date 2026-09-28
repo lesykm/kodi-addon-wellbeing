@@ -316,3 +316,111 @@ msgstr ""
 msgctxt "#32107"
 msgid "Password to unlock after limit has been reached or rest period has been entered."
 msgstr ""
+
+msgctxt "#32200"
+msgid "Number of items"
+msgstr ""
+
+msgctxt "#32201"
+msgid "Limit number of items"
+msgstr ""
+
+msgctxt "#32202"
+msgid "Items per day"
+msgstr ""
+
+msgctxt "#32203"
+msgid "Count an item after"
+msgstr ""
+
+msgctxt "#32204"
+msgid "Counting"
+msgstr ""
+
+msgctxt "#32205"
+msgid "Once per item per day"
+msgstr ""
+
+msgctxt "#32206"
+msgid "Every time it is started"
+msgstr ""
+
+msgctxt "#32207"
+msgid "Warn on the last item"
+msgstr ""
+
+msgctxt "#32208"
+msgid "Extra items per grant"
+msgstr ""
+
+msgctxt "#32209"
+msgid "Day starts at"
+msgstr ""
+
+msgctxt "#32210"
+msgid "Today's items"
+msgstr ""
+
+msgctxt "#32211"
+msgid "Show items played today"
+msgstr ""
+
+msgctxt "#32212"
+msgid "Reset today's item count"
+msgstr ""
+
+msgctxt "#32213"
+msgid "Grant extra items"
+msgstr ""
+
+msgctxt "#32220"
+msgid "%s of %s items played today"
+msgstr ""
+
+msgctxt "#32221"
+msgid "%s items left today"
+msgstr ""
+
+msgctxt "#32222"
+msgid "This is the last item for today"
+msgstr ""
+
+msgctxt "#32223"
+msgid "No items left for today"
+msgstr ""
+
+msgctxt "#32224"
+msgid "%s extra item(s) granted"
+msgstr ""
+
+msgctxt "#32225"
+msgid "Nothing played yet today"
+msgstr ""
+
+msgctxt "#32240"
+msgid "Whether the daily item limit applies to all media or only to video."
+msgstr ""
+
+msgctxt "#32241"
+msgid "How many items may be played on this day."
+msgstr ""
+
+msgctxt "#32242"
+msgid "How long an item must actually play before it counts, in seconds. Starting something and stopping again costs nothing."
+msgstr ""
+
+msgctxt "#32243"
+msgid "Whether re-opening an item that was already played today costs another item."
+msgstr ""
+
+msgctxt "#32244"
+msgid "Show a warning when only one item is left for today."
+msgstr ""
+
+msgctxt "#32245"
+msgid "How many extra items each grant adds."
+msgstr ""
+
+msgctxt "#32246"
+msgid "The hour at which a new day begins. 0 is midnight; 4 keeps late-night viewing on the previous day."
+msgstr ""
